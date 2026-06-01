@@ -1969,4 +1969,191 @@ describe('HlsParser live', () => {
 
     expect(video.segmentIndex.mergeAndEvict).toHaveBeenCalled();
   });
+  describe('truncatePlaylistText_', () => {
+    /**
+     * @param {string} text
+     * @param {number} maxSegments
+     * @return {string}
+     * @suppress {accessControls}
+     */
+    function truncate(text, maxSegments) {
+      return parser.truncatePlaylistText_(text, maxSegments);
+    }
+
+    const header = [
+      '#EXTM3U\n',
+      '#EXT-X-TARGETDURATION:5\n',
+      '#EXT-X-MEDIA-SEQUENCE:100\n',
+      '#EXT-X-MAP:URI="init.mp4"\n',
+    ].join('');
+
+    function makeSegments(count, baseUri = 'seg') {
+      let text = '';
+      for (let i = 0; i < count; i++) {
+        text += '#EXTINF:2,\n' + baseUri + i + '.mp4\n';
+      }
+      return text;
+    }
+
+    it('returns text unchanged if below limit', () => {
+      const text = header + '#EXTINF:2,\nseg0.mp4\n#EXTINF:2,\nseg1.mp4\n';
+      const result = truncate(text, 5);
+      expect(result).toBe(text);
+      expect((result.match(/#EXTINF:/g) || []).length).toBe(2);
+    });
+
+    it('truncates to exactly maxSegments', () => {
+      const text = header + makeSegments(30);
+      const result = truncate(text, 5);
+      expect((result.match(/#EXTINF:/g) || []).length).toBe(5);
+    });
+
+    it('keeps the latest segments', () => {
+      const text = header + makeSegments(30);
+      const result = truncate(text, 5);
+      expect(result).toContain('seg25.mp4');
+      expect(result).toContain('seg29.mp4');
+      expect(result).not.toContain('seg24.mp4');
+    });
+
+    it('adjusts EXT-X-MEDIA-SEQUENCE', () => {
+      const text = header + makeSegments(30);
+      const result = truncate(text, 5);
+      // Original media sequence = 100, 25 segments skipped -> 125
+      expect(result).toMatch(/#EXT-X-MEDIA-SEQUENCE:125/);
+    });
+
+    it('adjusts EXT-X-MEDIA-SEQUENCE for uneven counts', () => {
+      const text = header + makeSegments(7);
+      const result = truncate(text, 2);
+      // 5 skipped -> media sequence 105
+      expect(result).toMatch(/#EXT-X-MEDIA-SEQUENCE:105/);
+      expect((result.match(/#EXTINF:/g) || []).length).toBe(2);
+    });
+
+    it('preserves header tags', () => {
+      const text = header + makeSegments(30);
+      const result = truncate(text, 5);
+      expect(result).toContain('#EXTM3U\n');
+      expect(result).toContain('#EXT-X-TARGETDURATION:5');
+      expect(result).toContain('#EXT-X-MAP:URI="init.mp4"');
+    });
+
+    it('preserves trailing RENDITION-REPORT and PRELOAD-HINT', () => {
+      const text = header + makeSegments(5) +
+          '#EXT-X-RENDITION-REPORT:URI="audio",LAST-MSN=101\n' +
+          '#EXT-X-PRELOAD-HINT:TYPE=PART,URI="partial.mp4"\n';
+      const result = truncate(text, 2);
+      expect(result).toContain('#EXT-X-RENDITION-REPORT:');
+      expect(result).toContain('#EXT-X-PRELOAD-HINT:');
+    });
+
+    it('carries forward EXT-X-MAP from truncated section', () => {
+      const playlist = [
+        '#EXTM3U\n',
+        '#EXT-X-TARGETDURATION:5\n',
+        '#EXT-X-MEDIA-SEQUENCE:100\n',
+        '#EXTINF:2,\n',
+        'seg0.mp4\n',
+        '#EXT-X-MAP:URI="map-init.mp4"\n',
+        '#EXTINF:2,\n',
+        'seg1.mp4\n',
+        '#EXTINF:2,\n',
+        'seg2.mp4\n',
+        '#EXTINF:2,\n',
+        'seg3.mp4\n',
+        '#EXTINF:2,\n',
+        'seg4.mp4\n',
+        '#EXTINF:2,\n',
+        'seg5.mp4\n',
+      ].join('');
+      const result = truncate(playlist, 2);
+      // The MAP tag from seg1's section should be carried forward
+      expect(result).toContain('#EXT-X-MAP:URI="map-init.mp4"');
+      // Only last 2 segments survive
+      expect(result).toContain('seg4.mp4');
+      expect(result).toContain('seg5.mp4');
+      expect(result).not.toContain('seg3.mp4');
+    });
+
+    it('carries forward EXT-X-KEY from truncated section', () => {
+      const playlist = [
+        '#EXTM3U\n',
+        '#EXT-X-TARGETDURATION:5\n',
+        '#EXT-X-MEDIA-SEQUENCE:100\n',
+        '#EXTINF:2,\n',
+        'seg0.mp4\n',
+        '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n',
+        '#EXTINF:2,\n',
+        'seg1.mp4\n',
+        '#EXTINF:2,\n',
+        'seg2.mp4\n',
+      ].join('');
+      const result = truncate(playlist, 1);
+      expect(result).toContain('#EXT-X-KEY:METHOD=AES-128,URI="key.bin"');
+      expect(result).not.toContain('seg1.mp4');
+      expect(result).toContain('seg2.mp4');
+    });
+
+    it('handles lines ending with CR', () => {
+      const text = header.replace(/\n/g, '\r\n') +
+          makeSegments(5).replace(/\n/g, '\r\n');
+      const result = truncate(text, 2);
+      expect((result.match(/#EXTINF:/g) || []).length).toBe(2);
+    });
+
+    it('returns original text when segments are less than max', () => {
+      const text = header + makeSegments(3);
+      const result = truncate(text, 10);
+      expect(result).toBe(text);
+    });
+
+    it('handles playlist with no EXT-X-MEDIA-SEQUENCE (assumes 0)', () => {
+      const noSeqHeader = [
+        '#EXTM3U\n',
+        '#EXT-X-TARGETDURATION:5\n',
+      ].join('');
+      const text = noSeqHeader + makeSegments(10);
+      const result = truncate(text, 3);
+      // 7 skipped, media sequence from 0 to 7
+      expect(result).toMatch(/#EXT-X-MEDIA-SEQUENCE:7/);
+    });
+
+    it('drops DATERANGE tags from truncated section', () => {
+      const playlist = [
+        '#EXTM3U\n',
+        '#EXT-X-TARGETDURATION:5\n',
+        '#EXT-X-MEDIA-SEQUENCE:100\n',
+        '#EXTINF:2,\n',
+        'seg0.mp4\n',
+        '#EXT-X-DATERANGE:ID="ad1",START-DATE="2024-01-01T00:00:00Z"\n',
+        '#EXTINF:2,\n',
+        'seg1.mp4\n',
+      ].join('');
+      const result = truncate(playlist, 1);
+      expect(result).not.toContain('#EXT-X-DATERANGE');
+      expect(result).toContain('seg1.mp4');
+    });
+
+    it('handles partial segments attached to kept segments', () => {
+      const playlist = header + makeSegments(3) +
+          '#EXT-X-PART:DURATION=0.5,URI="part1.mp4"\n' +
+          '#EXT-X-PART:DURATION=0.5,URI="part2.mp4"\n' +
+          '#EXTINF:2,\nseg3.mp4\n';
+      const result = truncate(playlist, 2);
+      expect(result).toContain('#EXT-X-PART:DURATION=0.5,URI="part1.mp4"');
+      expect(result).toContain('seg3.mp4');
+    });
+
+    it('splits correctly on mixed \n and \r\n line endings', () => {
+      const mixed = '#EXTM3U\r\n' +
+          '#EXT-X-TARGETDURATION:5\r\n' +
+          '#EXT-X-MEDIA-SEQUENCE:0\r\n' +
+          '#EXTINF:2,\r\nseg0.mp4\r\n' +
+          '#EXTINF:2,\nseg1.mp4\r\n';
+      const result = truncate(mixed, 1);
+      expect((result.match(/#EXTINF:/g) || []).length).toBe(1);
+      expect(result).not.toContain('seg0.mp4');
+    });
+  });
 });  // describe('HlsParser live')

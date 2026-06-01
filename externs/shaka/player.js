@@ -1548,6 +1548,7 @@ shaka.extern.DashManifestConfiguration;
  *   allowLowLatencyByteRangeOptimization: boolean,
  *   allowRangeRequestsToGuessMimeType: boolean,
  *   chaptersUri: string,
+ *   maxLiveSegments: number,
  * }}
  *
  * @property {boolean} ignoreTextStreamFailures
@@ -1648,6 +1649,12 @@ shaka.extern.DashManifestConfiguration;
  *   https://developer.apple.com/documentation/http-live-streaming/providing-javascript-object-notation-json-chapters
  *   <br>
  *   Defaults to <code>''</code>.
+ * @property {number} maxLiveSegments
+ *   The maximum number of segments from a live HLS playlist to keep in the
+ *   segment index. Segments beyond this limit are evicted from the front,
+ *   reducing memory and CPU overhead on low-end devices.
+ *   <br>
+ *   Defaults to <code>Infinity</code> (no limit).
  *
  * @exportDoc
  */

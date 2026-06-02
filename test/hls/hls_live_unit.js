@@ -1996,7 +1996,7 @@ describe('HlsParser live', () => {
     }
 
     it('returns text unchanged if below limit', () => {
-      const text = header + '#EXTINF:2,\nseg0.mp4\n#EXTINF:2,\nseg1.mp4\n';
+      const text = header + makeSegments(2);
       const result = truncate(text, 5);
       expect(result).toBe(text);
       expect((result.match(/#EXTINF:/g) || []).length).toBe(2);
